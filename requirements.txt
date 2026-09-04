@@ -1,4 +1,7 @@
 streamlit
+torch
 transformers
 peft
-torch
+accelerate
+bitsandbytes
+huggingface_hub
