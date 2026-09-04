@@ -10,7 +10,7 @@ st.set_page_config(page_title="Mexo", page_icon="🤖")
 def load_model():
     tokenizer = AutoTokenizer.from_pretrained("gheyal/Mexo")
     base_model = AutoModelForCausalLM.from_pretrained(
-        "Qwen/Qwen3-0.6B", torch_dtype=torch.float32, device_map="cpu"
+        "Qwen/Qwen3-0.6B", torch_dtype=torch.bfloat16, device_map="cpu"
     )
     model = PeftModel.from_pretrained(base_model, "gheyal/Mexo")
     return tokenizer, model
@@ -42,7 +42,15 @@ def answer(query):
         return calc
     prompt = "Answer the following question directly and concisely.\n\nQuestion: " + query + "\nAnswer:"
     inputs = tokenizer(prompt, return_tensors="pt")
-    output = model.generate(**inputs, max_new_tokens=40, do_sample=True, temperature=0.5, top_p=0.9, repetition_penalty=1.3, eos_token_id=tokenizer.eos_token_id)
+    output = model.generate(
+        **inputs,
+        max_new_tokens=40,
+        do_sample=True,
+        temperature=0.5,
+        top_p=0.9,
+        repetition_penalty=1.3,
+        eos_token_id=tokenizer.eos_token_id
+    )
     full_output = tokenizer.decode(output[0], skip_special_tokens=True)
     result = full_output.split("Answer:")[-1].strip() if "Answer:" in full_output else full_output
     return clean_answer(result)
