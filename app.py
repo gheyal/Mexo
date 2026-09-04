@@ -1,75 +1,117 @@
 import streamlit as st
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
 import torch
-import re
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+from peft import PeftModel
 
-st.set_page_config(page_title="Mexo", page_icon="🤖")
+st.set_page_config(
+    page_title="Mexo",
+    page_icon="🤖"
+)
+
+BASE_MODEL = "Qwen/Qwen3-1.7B"
+ADAPTER = "gheyal/Mexo-1.7B"
+
 
 @st.cache_resource
 def load_model():
-    tokenizer = AutoTokenizer.from_pretrained("gheyal/Mexo")
-    base_model = AutoModelForCausalLM.from_pretrained(
-        "Qwen/Qwen3-0.6B", torch_dtype=torch.bfloat16, device_map="cpu"
+    tokenizer = AutoTokenizer.from_pretrained(ADAPTER)
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.float16
     )
-    model = PeftModel.from_pretrained(base_model, "gheyal/Mexo")
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        quantization_config=bnb_config,
+        device_map="auto"
+    )
+
+    model = PeftModel.from_pretrained(
+        base_model,
+        ADAPTER
+    )
+
+    model.eval()
+
     return tokenizer, model
+
 
 tokenizer, model = load_model()
 
-def try_calculate(query):
-    q = query.lower().replace('times', '*').replace('multiplied by', '*').replace('plus', '+').replace('minus', '-').replace('divided by', '/')
-    match = re.search(r'(\d+(?:\.\d+)?)\s*([\+\-\*/x])\s*(\d+(?:\.\d+)?)', q)
-    if match:
-        a, op, b = match.groups()
-        a, b = float(a), float(b)
-        op = '*' if op == 'x' else op
-        try:
-            return f"{a:g} {op} {b:g} = {eval(f'{a}{op}{b}'):g}"
-        except Exception:
-            return None
-    return None
 
-def clean_answer(text):
-    for i, ch in enumerate(text):
-        if ch in '.!?':
-            return text[:i+1].strip()
-    return text.strip()
+def answer(question):
+    messages = [
+        {
+            "role": "user",
+            "content": question
+        }
+    ]
 
-def answer(query):
-    calc = try_calculate(query)
-    if calc:
-        return calc
-    prompt = "Answer the following question directly and concisely.\n\nQuestion: " + query + "\nAnswer:"
-    inputs = tokenizer(prompt, return_tensors="pt")
-    output = model.generate(
-        **inputs,
-        max_new_tokens=40,
-        do_sample=True,
-        temperature=0.5,
-        top_p=0.9,
-        repetition_penalty=1.3,
-        eos_token_id=tokenizer.eos_token_id
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False
     )
-    full_output = tokenizer.decode(output[0], skip_special_tokens=True)
-    result = full_output.split("Answer:")[-1].strip() if "Answer:" in full_output else full_output
-    return clean_answer(result)
+
+    inputs = tokenizer(
+        prompt,
+        return_tensors="pt"
+    ).to(model.device)
+
+    with torch.no_grad():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=1024,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id
+        )
+
+    new_tokens = output[0][inputs["input_ids"].shape[1]:]
+
+    result = tokenizer.decode(
+        new_tokens,
+        skip_special_tokens=True
+    )
+
+    return result.strip()
+
 
 st.title("🤖 Mexo")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
+
 
 if prompt := st.chat_input("Ask something..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": prompt
+    })
+
     with st.chat_message("user"):
         st.write(prompt)
+
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner("Mexo is thinking..."):
             reply = answer(prompt)
-            st.write(reply)
-    st.session_state.messages.append({"role": "assistant", "content": reply})
+
+        st.write(reply)
+
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": reply
+    })
